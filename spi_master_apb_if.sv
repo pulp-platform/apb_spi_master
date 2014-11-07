@@ -9,7 +9,7 @@
 `define REG_TXFIFO 3'b110
 `define REG_RXFIFO 3'b111
 
-module spi_master_axi_if #( 
+module spi_master_apb_if #( 
 		parameter APB_ADDR_WIDTH = 12  //APB slaves are 4KB by default
 		) (
 		input  logic                      HCLK,
