@@ -97,9 +97,9 @@ module spi_master_axi_if #(
 					spi_clk_div_valid = 1'b1;
 				end
 				`REG_SPICMD:
-					spi_cmd[byte_index*8 +: 8] = PWDATA[(byte_index*8) +: 8];
+					spi_cmd = PWDATA;
 				`REG_SPIADR:
-					spi_addr[byte_index*8 +: 8] = PWDATA[(byte_index*8) +: 8];
+					spi_addr = PWDATA;
 				`REG_SPILEN:
 				begin
 					spi_cmd_len = PWDATA[7:0];
