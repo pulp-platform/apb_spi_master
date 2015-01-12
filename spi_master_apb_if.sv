@@ -50,8 +50,11 @@ module spi_master_apb_if #(
 	logic [2:0] write_address;
 	logic [2:0] read_address;
     
-	assign write_address = PADDR[5:3];
-	assign read_address  = PADDR[5:3];
+	assign write_address = PADDR[4:2];
+	assign read_address  = PADDR[4:2];
+
+    assign PREADY  = spi_data_tx_ready;
+    assign PSLVERR = 1'b0;
     
 	always @( posedge HCLK or negedge HRESETn )
 	begin
