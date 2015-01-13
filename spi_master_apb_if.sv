@@ -53,8 +53,30 @@ module spi_master_apb_if #(
 	assign write_address = PADDR[4:2];
 	assign read_address  = PADDR[4:2];
 
-    assign PREADY  = spi_data_tx_ready;
     assign PSLVERR = 1'b0;
+
+    always_comb
+    begin
+        if (PSEL && PENABLE)
+        begin
+            if (PWRITE)
+            begin
+                if (write_address == `REG_TXFIFO)
+                    PREADY = spi_data_tx_ready;
+                else
+                    PREADY = 1'b1;
+            end
+            else
+            begin
+                if (read_address == `REG_RXFIFO)
+                    PREADY = spi_data_rx_valid;
+                else
+                    PREADY = 1'b1;
+            end
+        end
+        else
+            PREADY = 1'b1;
+    end
     
 	always @( posedge HCLK or negedge HRESETn )
 	begin
