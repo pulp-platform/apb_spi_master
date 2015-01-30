@@ -127,8 +127,8 @@ module spi_master_apb_if #(
 					spi_addr = PWDATA;
 				`REG_SPILEN:
 				begin
-					spi_cmd_len = PWDATA[7:0];
-					spi_addr_len = PWDATA[15:8];
+					spi_cmd_len = PWDATA[5:0];
+					spi_addr_len = PWDATA[13:8];
 					spi_data_len[7:0] = PWDATA[23:16];
 					spi_data_len[15:8] = PWDATA[31:24];
 				end
@@ -173,7 +173,8 @@ module spi_master_apb_if #(
 			PRDATA = spi_data_rx;
       endcase
     end // SLAVE_REG_READ_PROC
-
+    
+    assign spi_data_tx       = PWDATA;
     assign spi_data_tx_valid = PSEL & PENABLE &  PWRITE & (write_address == `REG_TXFIFO);
     assign spi_data_rx_ready = PSEL & PENABLE & ~PWRITE & (read_address  == `REG_RXFIFO);
 
