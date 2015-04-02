@@ -171,6 +171,8 @@ module spi_master_apb_if #(
    			PRDATA = {spi_dummy_wr,spi_dummy_rd};
 		`REG_RXFIFO:
 			PRDATA = spi_data_rx;
+        default:
+            PRDATA = 'h0;
       endcase
     end // SLAVE_REG_READ_PROC
     
