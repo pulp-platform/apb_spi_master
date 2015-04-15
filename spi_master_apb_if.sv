@@ -1,16 +1,20 @@
 `define log2(VALUE) ((VALUE) < ( 1 ) ? 0 : (VALUE) < ( 2 ) ? 1 : (VALUE) < ( 4 ) ? 2 : (VALUE) < ( 8 ) ? 3 : (VALUE) < ( 16 )  ? 4 : (VALUE) < ( 32 )  ? 5 : (VALUE) < ( 64 )  ? 6 : (VALUE) < ( 128 ) ? 7 : (VALUE) < ( 256 ) ? 8 : (VALUE) < ( 512 ) ? 9 : (VALUE) < ( 1024 ) ? 10 : (VALUE) < ( 2048 ) ? 11 : (VALUE) < ( 4096 ) ? 12 : (VALUE) < ( 8192 ) ? 13 : (VALUE) < ( 16384 ) ? 14 : (VALUE) < ( 32768 ) ? 15 : (VALUE) < ( 65536 ) ? 16 : (VALUE) < ( 131072 ) ? 17 : (VALUE) < ( 262144 ) ? 18 : (VALUE) < ( 524288 ) ? 19 : (VALUE) < ( 1048576 ) ? 20 : (VALUE) < ( 1048576 * 2 ) ? 21 : (VALUE) < ( 1048576 * 4 ) ? 22 : (VALUE) < ( 1048576 * 8 ) ? 23 : (VALUE) < ( 1048576 * 16 ) ? 24 : 25)
 
-`define REG_STATUS 3'b000
-`define REG_CLKDIV 3'b001
-`define REG_SPICMD 3'b010
-`define REG_SPIADR 3'b011
-`define REG_SPILEN 3'b100
-`define REG_SPIDUM 3'b101
-`define REG_TXFIFO 3'b110
-`define REG_RXFIFO 3'b111
+`define REG_STATUS 4'b0000 // BASEREG + 0x00
+`define REG_CLKDIV 4'b0001 // BASEREG + 0x04
+`define REG_SPICMD 4'b0010 // BASEREG + 0x08
+`define REG_SPIADR 4'b0011 // BASEREG + 0x0C
+`define REG_SPILEN 4'b0100 // BASEREG + 0x10
+`define REG_SPIDUM 4'b0101 // BASEREG + 0x14
+`define REG_TXFIFO 4'b0110 // BASEREG + 0x18
+`define REG_RXFIFO 4'b1000 // BASEREG + 0x20
+`define REG_INTCFG 4'b1001 // BASEREG + 0x24
+`define REG_INTSTA 4'b1010 // BASEREG + 0x28
 
 module spi_master_apb_if #( 
-		parameter APB_ADDR_WIDTH = 12  //APB slaves are 4KB by default
+		parameter BUFFER_DEPTH   = 10,
+		parameter APB_ADDR_WIDTH = 12,  //APB slaves are 4KB by default
+		parameter LOG_BUFFER_DEPTH = `log2(BUFFER_DEPTH)
 		) (
 		input  logic                      HCLK,
 		input  logic                      HRESETn,
@@ -34,6 +38,13 @@ module spi_master_apb_if #(
 		output logic               [15:0] spi_data_len,
 		output logic               [15:0] spi_dummy_rd,
 		output logic               [15:0] spi_dummy_wr,
+		output logic [LOG_BUFFER_DEPTH:0] spi_int_th_tx,
+		output logic [LOG_BUFFER_DEPTH:0] spi_int_th_rx,
+		output logic [LOG_BUFFER_DEPTH:0] spi_int_cnt_tx,
+		output logic [LOG_BUFFER_DEPTH:0] spi_int_cnt_rx,
+        output logic                      spi_int_en,
+        output logic                      spi_int_cnt_en,
+        output logic                      spi_int_rd_sta,
 		output logic                      spi_swrst,
 		output logic                      spi_rd,
 		output logic                      spi_wr,
@@ -47,36 +58,16 @@ module spi_master_apb_if #(
 		output logic                      spi_data_rx_ready
 		);
 
-	logic [2:0] write_address;
-	logic [2:0] read_address;
+	logic [3:0] write_address;
+	logic [3:0] read_address;
     
-	assign write_address = PADDR[4:2];
-	assign read_address  = PADDR[4:2];
+	assign write_address = PADDR[5:2];
+	assign read_address  = PADDR[5:2];
 
     assign PSLVERR = 1'b0;
+    assign PREADY  = 1'b1;
 
-    always_comb
-    begin
-        if (PSEL && PENABLE)
-        begin
-            if (PWRITE)
-            begin
-                if (write_address == `REG_TXFIFO)
-                    PREADY = spi_data_tx_ready;
-                else
-                    PREADY = 1'b1;
-            end
-            else
-            begin
-                if (read_address == `REG_RXFIFO)
-                    PREADY = spi_data_rx_valid;
-                else
-                    PREADY = 1'b1;
-            end
-        end
-        else
-            PREADY = 1'b1;
-    end
+    assign spi_int_rd_sta = PSEL & PENABLE & ~PWRITE & (read_address  == `REG_INTSTA);
     
 	always @( posedge HCLK or negedge HRESETn )
 	begin
@@ -97,6 +88,12 @@ module spi_master_apb_if #(
 			spi_dummy_rd	  =  'h0;
 			spi_dummy_wr      =  'h0;
 			spi_csreg         =  'h0;
+            spi_int_th_tx     =  'h0;
+            spi_int_th_rx     =  'h0;
+            spi_int_cnt_tx    =  'h0;
+            spi_int_cnt_rx    =  'h0;
+            spi_int_cnt_en    = 1'b0; 
+            spi_int_en        = 1'b0; 
 		end
 		else if (PSEL && PENABLE && PWRITE)
 		begin
@@ -139,6 +136,15 @@ module spi_master_apb_if #(
 					spi_dummy_wr[7:0] = PWDATA[23:16];
 					spi_dummy_wr[15:8] = PWDATA[31:24];
 				end
+                `REG_INTCFG:
+                begin
+                    spi_int_th_tx  = PWDATA[     LOG_BUFFER_DEPTH: 0];
+                    spi_int_th_rx  = PWDATA[ 7 + LOG_BUFFER_DEPTH: 8];
+                    spi_int_cnt_tx = PWDATA[15 + LOG_BUFFER_DEPTH:16];
+                    spi_int_cnt_rx = PWDATA[23 + LOG_BUFFER_DEPTH:24];
+                    spi_int_cnt_en = PWDATA[30];
+                    spi_int_en     = PWDATA[31];
+                end
 			endcase
 		end
 		else
@@ -171,6 +177,16 @@ module spi_master_apb_if #(
    			PRDATA = {spi_dummy_wr,spi_dummy_rd};
 		`REG_RXFIFO:
 			PRDATA = spi_data_rx;
+        `REG_INTCFG:
+        begin
+            PRDATA                           = 'h0;
+            PRDATA[     LOG_BUFFER_DEPTH: 0] = spi_int_th_tx;
+            PRDATA[ 7 + LOG_BUFFER_DEPTH: 8] = spi_int_th_rx;
+            PRDATA[15 + LOG_BUFFER_DEPTH:16] = spi_int_cnt_tx;
+            PRDATA[23 + LOG_BUFFER_DEPTH:24] = spi_int_cnt_rx;
+            PRDATA[30]                       = spi_int_cnt_en;
+            PRDATA[31]                       = spi_int_en;
+        end
         default:
             PRDATA = 'h0;
       endcase

@@ -1,7 +1,7 @@
 `define log2(VALUE) ((VALUE) < ( 1 ) ? 0 : (VALUE) < ( 2 ) ? 1 : (VALUE) < ( 4 ) ? 2 : (VALUE) < ( 8 ) ? 3 : (VALUE) < ( 16 )  ? 4 : (VALUE) < ( 32 )  ? 5 : (VALUE) < ( 64 )  ? 6 : (VALUE) < ( 128 ) ? 7 : (VALUE) < ( 256 ) ? 8 : (VALUE) < ( 512 ) ? 9 : (VALUE) < ( 1024 ) ? 10 : (VALUE) < ( 2048 ) ? 11 : (VALUE) < ( 4096 ) ? 12 : (VALUE) < ( 8192 ) ? 13 : (VALUE) < ( 16384 ) ? 14 : (VALUE) < ( 32768 ) ? 15 : (VALUE) < ( 65536 ) ? 16 : (VALUE) < ( 131072 ) ? 17 : (VALUE) < ( 262144 ) ? 18 : (VALUE) < ( 524288 ) ? 19 : (VALUE) < ( 1048576 ) ? 20 : (VALUE) < ( 1048576 * 2 ) ? 21 : (VALUE) < ( 1048576 * 4 ) ? 22 : (VALUE) < ( 1048576 * 8 ) ? 23 : (VALUE) < ( 1048576 * 16 ) ? 24 : 25)
 
 module apb_spi_master #( 
-		parameter BUFFER_DEPTH   = 8,
+		parameter BUFFER_DEPTH   = 10,
 		parameter APB_ADDR_WIDTH = 12  //APB slaves are 4KB by default
 		) (
 		input  logic                      HCLK,
@@ -70,30 +70,153 @@ module apb_spi_master #(
 	
 		logic [LOG_BUFFER_DEPTH:0] elements_tx;
 		logic [LOG_BUFFER_DEPTH:0] elements_rx;
-		logic [LOG_BUFFER_DEPTH:0] elements_tx_old;
-		logic [LOG_BUFFER_DEPTH:0] elements_rx_old;
+
+        logic [LOG_BUFFER_DEPTH:0] r_counter_tx;
+        logic [LOG_BUFFER_DEPTH:0] r_counter_rx;
 		
+        logic [LOG_BUFFER_DEPTH:0] s_th_tx;
+        logic [LOG_BUFFER_DEPTH:0] s_th_rx;
+
+        logic [LOG_BUFFER_DEPTH:0] s_cnt_tx;
+        logic [LOG_BUFFER_DEPTH:0] s_cnt_rx;
+
+        logic                      s_rise_int_tx;
+        logic                      s_rise_int_rx;
+		
+        logic                      s_int_tx;
+        logic                      s_int_rx;
+		
+        logic                      s_int_en;
+        logic                      s_int_cnt_en;
+
+        logic                      s_int_rd_intsta;
+
+        enum logic [1:0] { INT_RX_ACTIVE, GEN_INT_RX, INT_RX_INACTIVE } r_state_rx,s_state_rx_next;
+        enum logic [1:0] { INT_TX_ACTIVE, GEN_INT_TX, INT_TX_INACTIVE } r_state_tx,s_state_tx_next;
+
 		localparam FILL_BITS = 7-LOG_BUFFER_DEPTH;
 		
+        assign s_rise_int_tx = (elements_tx <= s_th_tx);
+        assign s_rise_int_rx = (elements_rx >= s_th_rx);
+
 		assign spi_status = {{FILL_BITS{1'b0}},elements_tx,{FILL_BITS{1'b0}},elements_rx,9'h0,spi_ctrl_status};
-		assign events_o[0] = (((elements_rx==4'b0100) && (elements_rx_old==4'b0101)) || ((elements_tx==4'b0101) && (elements_tx_old==4'b0100)));
+
+		assign events_o[0] = s_int_tx | s_int_rx;
 		assign events_o[1] = s_eot;
 
-        always_ff @(posedge HCLK or negedge HRESETn)
+    always @ (posedge HCLK or negedge HRESETn) 
+    begin
+        if(~HRESETn) 
         begin
-            if (HRESETn == 1'b0)
+            r_state_tx <= INT_TX_ACTIVE;
+            r_state_rx <= INT_RX_ACTIVE;
+        end
+        else
+        begin
+            r_state_tx <= s_state_tx_next;
+            r_state_rx <= s_state_rx_next;
+        end
+    end
+
+    always @ (posedge HCLK or negedge HRESETn) 
+    begin
+        if(~HRESETn) 
+        begin
+            r_counter_tx <= 'h0;
+            r_counter_rx <= 'h0;
+        end
+        else
+        begin
+            if (s_int_cnt_en)
             begin
-               elements_rx_old <= 'h0;
-               elements_tx_old <= 'h0;
+                if (spi_ctrl_data_tx_valid && spi_ctrl_data_tx_ready)
+                begin
+                    if (r_counter_tx == s_cnt_tx-1)
+                        r_counter_tx <= 'h0;
+                    else
+                        r_counter_tx <= r_counter_tx + 1;
+                end
+                if (spi_ctrl_data_rx_valid && spi_ctrl_data_rx_ready)
+                begin
+                    if (r_counter_rx == s_cnt_rx-1)
+                        r_counter_rx <= 'h0;
+                    else
+                        r_counter_rx <= r_counter_rx + 1;
+                end
             end
             else
             begin
-               elements_rx_old <= elements_rx;
-               elements_tx_old <= elements_tx;
+                r_counter_tx <= 'h0;
+                r_counter_rx <= 'h0;
             end
         end
+    end
+
+	always_comb
+	begin
+		s_state_tx_next = r_state_tx;
+        s_int_tx        = 1'b0;
+		case(r_state_tx)
+    		INT_TX_ACTIVE:
+			begin
+                if (s_rise_int_tx && s_int_en)
+                    s_state_tx_next = GEN_INT_TX;
+            end        
+    		GEN_INT_TX:
+			begin
+                s_int_tx = 1'b1;
+                s_state_tx_next = INT_TX_INACTIVE;
+            end        
+    		INT_TX_INACTIVE:
+			begin
+                if (s_int_cnt_en)
+                begin
+                    if ((spi_ctrl_data_tx_valid && spi_ctrl_data_tx_ready) && (r_counter_tx == s_cnt_tx-1))
+                        s_state_tx_next = INT_TX_ACTIVE;
+                end
+                else
+                begin
+                    if (s_int_rd_intsta)
+                        s_state_tx_next = INT_TX_ACTIVE;
+                end
+            end  
+        endcase
+    end      
 		
+
+	always_comb
+	begin
+		s_state_rx_next = r_state_rx;
+        s_int_rx        = 1'b0;
+		case(r_state_rx)
+    		INT_RX_ACTIVE:
+			begin
+                if (s_rise_int_rx && s_int_en)
+                    s_state_rx_next = GEN_INT_RX;
+            end        
+    		GEN_INT_RX:
+			begin
+                s_int_rx = 1'b1;
+                s_state_rx_next = INT_RX_INACTIVE;
+            end        
+    		INT_RX_INACTIVE:
+			begin
+                if (s_int_cnt_en)
+                begin
+                    if ((spi_ctrl_data_rx_valid && spi_ctrl_data_rx_ready) && (r_counter_rx == s_cnt_rx-1))
+                        s_state_rx_next = INT_RX_ACTIVE;
+                end
+                else
+                begin
+                    if (s_int_rd_intsta)
+                        s_state_rx_next = INT_RX_ACTIVE;
+                end
+            end  
+        endcase
+    end      
+
 	spi_master_apb_if #(
+            .BUFFER_DEPTH(BUFFER_DEPTH),
 			.APB_ADDR_WIDTH(APB_ADDR_WIDTH)      
 			) u_axiregs (
 			.HCLK(HCLK),
@@ -123,6 +246,13 @@ module apb_spi_master #(
 			.spi_qrd(spi_qrd),
 			.spi_qwr(spi_qwr),
 			.spi_csreg(spi_csreg),
+            .spi_int_th_rx(s_th_rx),
+            .spi_int_th_tx(s_th_tx),
+            .spi_int_cnt_rx(s_cnt_rx),
+            .spi_int_cnt_tx(s_cnt_tx),
+            .spi_int_en(s_int_en),
+            .spi_int_cnt_en(s_int_cnt_en),
+            .spi_int_rd_sta(s_int_rd_intsta),
 			.spi_data_tx(spi_data_tx),
 			.spi_data_tx_valid(spi_data_tx_valid),
 			.spi_data_tx_ready(spi_data_tx_ready),
